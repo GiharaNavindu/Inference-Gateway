@@ -9,6 +9,7 @@ An enterprise-grade, Kubernetes-native inference gateway and serving platform de
 Large Language Model (LLM) serving in production presents two distinct operational challenges: prohibitive GPU compute expenditures and high end-to-end request latencies. Repetitive or semantically similar queries saturate GPU memory and block inference queues without delivering incremental value.
 
 AIForge solves this by introducing a dual-path routing topology:
+
 - **Fast Path (Semantic Cache Hit)**: Intercepts incoming user prompts at the gateway layer, calculates dense vector embeddings using `sentence-transformers` on CPU, and evaluates cosine similarity against cached vectors in Redis. Queries with greater than 95% mathematical similarity are returned directly from cache in sub-50ms with zero GPU resource consumption.
 - **Heavy Path (Cache Miss / First Hit)**: Routes novel queries to a high-throughput `vLLM` container running on an NVIDIA L4 Tensor Core GPU (24GB VRAM) on GKE. The model generates tokens using PagedAttention, calculates FinOps execution costs dynamically, stores the result and vector in Redis with a 3600-second TTL, and returns the response.
 
@@ -101,12 +102,14 @@ sequenceDiagram
 ## Core Technical Components
 
 ### 1. Ingress Edge Proxy Layer (`edge-deployment.yaml`, `nginx.conf`, `Dockerfile.ui`)
+
 - Exposes port 80 externally via GKE Cloud LoadBalancer (`aiforge-edge-svc`).
 - Serves the static web console (`index.html`) at root `/`.
 - Reverse proxies internal API traffic destined for `/api/generate` to `http://aiforge-gateway-svc.default.svc.cluster.local/generate`.
 - Decouples client ingress from internal gateway networking and injects security headers (`X-Real-IP`, `X-Forwarded-For`).
 
 ### 2. Semantic Caching Gateway (`aiforge_gateway.py`, `Dockerfile.gateway`, `gateway-deployment.yaml`)
+
 - Built on Python 3.10 and FastAPI, containerized using an optimized PyTorch CPU runtime.
 - Employs `sentence-transformers` (`all-MiniLM-L6-v2`) locally to compute 384-dimensional dense sentence embeddings without relying on paid external embedding APIs.
 - Iterates over Redis keys prefixed with `prompt:*`, evaluating `util.cos_sim(prompt_embedding, cached_data["embedding"])`.
@@ -115,17 +118,20 @@ sequenceDiagram
 - Writes new generation outputs and normalized vector arrays into Redis with a 3600-second expiration (TTL).
 
 ### 3. Accelerated LLM Serving Engine (`vllm-gke.yaml`, `vllm-gke-lora.yaml`)
+
 - Runs `vllm/vllm-openai:latest` on a dedicated GKE accelerator node pool backed by an NVIDIA L4 GPU (24GB VRAM).
 - Model: `microsoft/Phi-3.5-mini-instruct` with 4096 context length.
 - Utilizes vLLM's PagedAttention algorithm with `--gpu-memory-utilization=0.90` to virtually eliminate KV cache fragmentation.
 - Multi-LoRA support enabled via `--enable-lora`, `--max-loras=4`, and `--max-cpu-loras=8` for dynamic multi-tenant fine-tuning multiplexing.
 
 ### 4. Event-Driven Autoscaler (`vllm-scaler.yaml`)
+
 - Leverages Kubernetes Event-driven Autoscaling (KEDA) via custom resource `ScaledObject`.
 - Targets `vllm-server` deployment across 1 to 3 replicas.
 - Triggered directly from Prometheus metrics querying `sum(vllm:num_requests_waiting)` with a threshold of 5 pending requests.
 
 ### 5. SRE Observability Stack (`vllm-monitor-fixed.yaml`, `custom-vllm-dashboard.yaml`, `grafana-lb.yaml`)
+
 - Prometheus Operator (`kube-prometheus-stack`) scrapes the vLLM engine pod `/metrics` endpoint across namespaces every 10 seconds.
 - Custom Grafana dashboard (`custom-vllm-dashboard.yaml`) automatically tracks:
   - GPU KV Cache Usage: `max(vllm:gpu_cache_usage_perc) * 100`
@@ -183,18 +189,20 @@ The platform underwent systematic empirical validation across single-query execu
 The front-facing Control Center records end-to-end latency and compute attribution for every processed payload.
 
 #### First Hit: Novel Prompt (Cache Miss - GPU Execution)
+
 For an initial unique query, no mathematical match exists in Redis. The request is routed to the NVIDIA L4 GPU inference engine, bearing full inference execution time and compute cost.
 
 ![UI First Hit - Cold GPU Inference](docs/screenshots/ui-gpu-inference.png)
 
-*Figure 1: Initial query execution requiring full model inference on the NVIDIA L4 GPU. Latency reflects queue and token generation runtime, with FinOps telemetry calculating estimated GPU compute cost based on execution duration.*
+_Figure 1: Initial query execution requiring full model inference on the NVIDIA L4 GPU. Latency reflects queue and token generation runtime, with FinOps telemetry calculating estimated GPU compute cost based on execution duration._
 
 #### Second Hit: Semantically Equivalent Prompt (Cache Hit - Fast Path)
+
 When a subsequent request with identical or semantically parallel phrasing arrives, the gateway calculates a vector similarity score above 0.95 and serves the cached output immediately.
 
 ![UI Second Hit - Semantic Cache Hit](docs/screenshots/ui-cache-hit.png)
 
-*Figure 2: Subsequent semantically identical request resolved by Redis Vector Memory. End-to-end response time drops to sub-50ms (e.g., 36ms), compute expenditure drops to $0.000000, achieving a massive reduction in latency while preserving GPU compute.*
+_Figure 2: Subsequent semantically identical request resolved by Redis Vector Memory. End-to-end response time drops to sub-50ms (e.g., 36ms), compute expenditure drops to $0.000000, achieving a massive reduction in latency while preserving GPU compute._
 
 ---
 
@@ -202,20 +210,20 @@ When a subsequent request with identical or semantically parallel phrasing arriv
 
 The system was evaluated under synthetic production traffic using Locust. The load profile simulated 100 concurrent users at an ingress ramp rate of 10 users/second for 3 minutes, executing a 75/25 traffic split (75% repetitive queries matching cached entries, 25% unique queries forcing GPU inference).
 
-| Test Metric | GPU Inference (Uncached) | Semantic Cache Hit (Fast Path) | Aggregated Production Total |
-| :--- | :--- | :--- | :--- |
-| **Total Processed Requests** | 462 | 1,429 | **1,891** |
-| **Failed Requests** | 0 (0.0%) | 0 (0.0%) | **0 (0.0%)** |
-| **Sustained Throughput** | 2.56 requests/sec | 7.91 requests/sec | **10.47 requests/sec** |
-| **Average Latency** | 5,714.69 ms | 4,420.53 ms | **4,736.72 ms** |
-| **Minimum Latency** | 2,523.00 ms | 2,747.00 ms | **2,523.00 ms** |
-| **Median (P50) Latency** | 5,700.00 ms | 5,200.00 ms | **5,300.00 ms** |
-| **95th Percentile (P95)** | 18,000.00 ms | 7,000.00 ms | **7,100.00 ms** |
-| **99th Percentile (P99)** | 32,000.00 ms | 7,300.00 ms | **20,000.00 ms** |
+| Test Metric                  | GPU Inference (Uncached) | Semantic Cache Hit (Fast Path) | Aggregated Production Total |
+| :--------------------------- | :----------------------- | :----------------------------- | :-------------------------- |
+| **Total Processed Requests** | 462                      | 1,429                          | **1,891**                   |
+| **Failed Requests**          | 0 (0.0%)                 | 0 (0.0%)                       | **0 (0.0%)**                |
+| **Sustained Throughput**     | 2.56 requests/sec        | 7.91 requests/sec              | **10.47 requests/sec**      |
+| **Average Latency**          | 5,714.69 ms              | 4,420.53 ms                    | **4,736.72 ms**             |
+| **Minimum Latency**          | 2,523.00 ms              | 2,747.00 ms                    | **2,523.00 ms**             |
+| **Median (P50) Latency**     | 5,700.00 ms              | 5,200.00 ms                    | **5,300.00 ms**             |
+| **95th Percentile (P95)**    | 18,000.00 ms             | 7,000.00 ms                    | **7,100.00 ms**             |
+| **99th Percentile (P99)**    | 32,000.00 ms             | 7,300.00 ms                    | **20,000.00 ms**            |
 
 ![Locust Concurrency Benchmark Report](docs/screenshots/locust-benchmark-report.png)
 
-*Figure 3: Locust distributed load benchmark report documenting 1,891 executed requests with zero request failures (0.0% failure rate) and consistent throughput under peak concurrency.*
+_Figure 3: Locust distributed load benchmark report documenting 1,891 executed requests with zero request failures (0.0% failure rate) and consistent throughput under peak concurrency._
 
 ---
 
@@ -225,7 +233,7 @@ Prometheus continuously scrapes the `/metrics` endpoint exposed by the vLLM serv
 
 ![Grafana vLLM Inference Engine Dashboard](docs/screenshots/grafana-vllm-metrics.png)
 
-*Figure 4: AIForge Inference Dashboard in Grafana. Visualizes real-time GPU KV Cache Usage (percentage), Active Running Requests, Generation Throughput (tokens/sec), and Queue Depth (Waiting Requests).*
+_Figure 4: AIForge Inference Dashboard in Grafana. Visualizes real-time GPU KV Cache Usage (percentage), Active Running Requests, Generation Throughput (tokens/sec), and Queue Depth (Waiting Requests)._
 
 ---
 
@@ -235,7 +243,7 @@ Cluster health and node resources were tracked under peak load using the Kuberne
 
 ![Grafana Kubernetes Compute Resources Workload Dashboard](docs/screenshots/grafana-workload-resources.png)
 
-*Figure 5: Grafana Kubernetes Workload Dashboard documenting pod CPU utilization, memory consumption (steady 4.52 MiB on the NGINX edge layer), network ingress/egress bandwidth, and error-free pod status during peak stress testing.*
+_Figure 5: Grafana Kubernetes Workload Dashboard documenting pod CPU utilization, memory consumption (steady 4.52 MiB on the NGINX edge layer), network ingress/egress bandwidth, and error-free pod status during peak stress testing._
 
 ---
 
@@ -243,24 +251,26 @@ Cluster health and node resources were tracked under peak load using the Kuberne
 
 To ensure screenshots render in this documentation, place your five captured images into the `docs/screenshots/` directory matching the exact filenames listed below:
 
-| Target Filename | Required Content | Corresponding Section |
-| :--- | :--- | :--- |
-| `ui-gpu-inference.png` | Web console capture of first query execution showing GPU routing and cost | Figure 1 (UI First Hit) |
-| `ui-cache-hit.png` | Web console capture of second query showing Redis hit, 0.0s cost, fast latency | Figure 2 (UI Second Hit) |
-| `locust-benchmark-report.png` | Locust HTML/GUI report showing 1,891 requests, RPS, and 0% failures | Figure 3 (Locust Benchmark) |
-| `grafana-vllm-metrics.png` | Grafana dashboard showing KV Cache, running requests, tokens/sec, queue depth | Figure 4 (vLLM Dashboard) |
-| `grafana-workload-resources.png` | Grafana dashboard: Kubernetes / Compute Resources / Workload | Figure 5 (Workload Dashboard) |
+| Target Filename                  | Required Content                                                               | Corresponding Section         |
+| :------------------------------- | :----------------------------------------------------------------------------- | :---------------------------- |
+| `ui-gpu-inference.png`           | Web console capture of first query execution showing GPU routing and cost      | Figure 1 (UI First Hit)       |
+| `ui-cache-hit.png`               | Web console capture of second query showing Redis hit, 0.0s cost, fast latency | Figure 2 (UI Second Hit)      |
+| `locust-benchmark-report.png`    | Locust HTML/GUI report showing 1,891 requests, RPS, and 0% failures            | Figure 3 (Locust Benchmark)   |
+| `grafana-vllm-metrics.png`       | Grafana dashboard showing KV Cache, running requests, tokens/sec, queue depth  | Figure 4 (vLLM Dashboard)     |
+| `grafana-workload-resources.png` | Grafana dashboard: Kubernetes / Compute Resources / Workload                   | Figure 5 (Workload Dashboard) |
 
 ---
 
 ## Deployment and Step-by-Step Reproduction Guide
 
 ### Prerequisites
+
 - Google Cloud Platform (GCP) project with billing enabled.
 - Compute Engine quota for at least 1 NVIDIA L4 GPU (`gce-accelerator-l4`).
 - Google Cloud Shell or local terminal with `gcloud`, `kubectl`, `terraform`, and `helm` installed.
 
 ### Step 1: Validate Regional GPU Quota and Capacity
+
 Run the automated probe script to find a zone with available NVIDIA L4 capacity before provisioning:
 
 ```bash
@@ -269,6 +279,7 @@ chmod +x test-l4.sh
 ```
 
 ### Step 2: Infrastructure as Code Provisioning (Terraform)
+
 Initialize and provision the GKE cluster with the dedicated L4 GPU node pool:
 
 ```bash
@@ -280,6 +291,7 @@ gcloud container clusters get-credentials aiforge-cluster --zone us-central1-b
 ```
 
 ### Step 3: Deploy In-Memory Cache (Redis)
+
 Deploy Redis 7 to handle vector memory storage:
 
 ```bash
@@ -288,6 +300,7 @@ kubectl rollout status deployment/redis-cache
 ```
 
 ### Step 4: Build and Deploy Semantic Gateway
+
 Build the CPU-optimized FastAPI container with Google Cloud Build and apply Kubernetes manifests:
 
 ```bash
@@ -302,6 +315,7 @@ kubectl rollout status deployment/aiforge-gateway
 ```
 
 ### Step 5: Deploy vLLM Accelerated Inference Engine
+
 Deploy the vLLM model server with Multi-LoRA support on the NVIDIA L4 GPU node pool:
 
 ```bash
@@ -312,6 +326,7 @@ kubectl rollout status deployment/vllm-server -w
 ```
 
 ### Step 6: Build and Deploy Ingress Edge Proxy & UI
+
 Build the Alpine NGINX container bundling the static control center interface and reverse proxy configuration:
 
 ```bash
@@ -327,6 +342,7 @@ kubectl get svc aiforge-edge-svc -w
 ```
 
 ### Step 7: Configure Monitoring, Dashboards, and Autoscaling
+
 Install the Prometheus Operator stack, apply the cross-namespace ServiceMonitor, import the custom Grafana dashboard, and expose Grafana publicly:
 
 ```bash
@@ -351,6 +367,7 @@ kubectl get svc grafana-public -n monitoring -w
 ```
 
 ### Step 8: Execute Load Testing with Locust
+
 Run the distributed benchmark headless to generate baseline traffic and output an HTML performance report:
 
 ```bash
@@ -428,6 +445,7 @@ GPU cost estimation in the gateway is calculated in real time per request using 
 $$\text{Estimated Cost (USD)} = \text{Request Duration (seconds)} \times \left( \frac{\text{Hourly GPU Machine Rate}}{3600} \right)$$
 
 For the GKE `g2-standard-4` instance hosting an NVIDIA L4 GPU:
+
 - Instance Hourly Rate: **$0.56 / hour**
 - Per-Second Rate: **$0.0001555... / second**
 - Fast Path queries resolve in Redis with zero GPU runtime, resulting in **$0.000000** allocated cost.
