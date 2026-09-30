@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-vllm-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  vllm-custom.json: |
+    {
+      "title": "AIForge Inference Dashboard",
+      "timezone": "browser",
+      "refresh": "5s",
+      "panels": [
+        {
+          "type": "stat",
+          "title": "GPU KV Cache Usage",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+          "targets": [{"expr": "max(vllm:gpu_cache_usage_perc) * 100", "format": "time_series"}],
+          "fieldConfig": {"defaults": {"unit": "percent"}}
+        },
+        {
+          "type": "stat",
+          "title": "Active Running Requests",
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+          "targets": [{"expr": "sum(vllm:num_requests_running)", "format": "time_series"}]
+        },
+        {
+          "type": "timeseries",
+          "title": "Generation Throughput (Tokens/sec)",
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+          "targets": [{"expr": "sum(vllm:avg_generation_throughput_tok_per_s)", "format": "time_series"}],
+          "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 20}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Queue Depth (Waiting Requests)",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(vllm:num_requests_waiting)", "format": "time_series", "legendFormat": "Waiting"}]
+        }
+      ]
+    }

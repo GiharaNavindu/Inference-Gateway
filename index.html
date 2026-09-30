@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIForge Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans h-screen flex flex-col">
+    <header class="bg-gray-800 p-4 shadow-md border-b border-gray-700">
+        <h1 class="text-xl font-bold text-blue-400">AIForge Enterprise Gateway</h1>
+        <p class="text-xs text-gray-400">Phi-3.5 Inference | NVIDIA L4 Acceleration | FinOps Enabled</p>
+    </header>
+
+    <main id="chat-box" class="flex-1 overflow-y-auto p-6 space-y-4">
+        <!-- Messages inject here -->
+    </main>
+
+    <footer class="bg-gray-800 p-4 border-t border-gray-700">
+        <div class="flex max-w-4xl mx-auto space-x-4">
+            <input id="prompt" type="text" class="flex-1 bg-gray-700 text-white rounded px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter inference payload...">
+            <button onclick="sendRequest()" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded font-semibold transition">Execute</button>
+        </div>
+    </footer>
+
+    <script>
+        async function sendRequest() {
+            const input = document.getElementById('prompt');
+            const text = input.value.trim();
+            if (!text) return;
+
+            const chatBox = document.getElementById('chat-box');
+            chatBox.innerHTML += `<div class="text-right"><span class="inline-block bg-blue-600 rounded-lg px-4 py-2 max-w-2xl">${text}</span></div>`;
+            input.value = '';
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: "microsoft/Phi-3.5-mini-instruct",
+                        messages: [{ role: "user", content: text }],
+                        max_tokens: 512
+                    })
+                });
+                
+                const data = await response.json();
+                
+                const finops = `<div class="text-xs text-gray-400 mt-1">Latency: ${data.telemetry.latency_seconds}s | Est. Cost: $${data.telemetry.estimated_gpu_cost_usd}</div>`;
+                chatBox.innerHTML += `<div class="text-left"><span class="inline-block bg-gray-700 rounded-lg px-4 py-2 max-w-2xl">${data.response}${finops}</span></div>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } catch (err) {
+                chatBox.innerHTML += `<div class="text-left text-red-400">Connection Error: Could not reach edge proxy.</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

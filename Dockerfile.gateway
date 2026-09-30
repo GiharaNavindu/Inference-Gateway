@@ -1,0 +1,12 @@
+FROM python:3.10-slim
+WORKDIR /app
+
+# Fix: Use extra-index-url so pip doesn't break on dependencies
+RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir fastapi uvicorn httpx redis sentence-transformers
+
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+COPY aiforge_gateway.py .
+EXPOSE 80
+CMD ["uvicorn", "aiforge_gateway:app", "--host", "0.0.0.0", "--port", "80"]

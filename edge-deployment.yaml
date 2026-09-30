@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiforge-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiforge-edge
+  template:
+    metadata:
+      labels:
+        app: aiforge-edge
+    spec:
+      containers:
+      - name: edge
+        image: gcr.io/hack-506414/aiforge-nginx-edge:v1
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiforge-edge-svc
+spec:
+  type: LoadBalancer
+  selector:
+    app: aiforge-edge
+  ports:
+  - port: 80
+    targetPort: 80
