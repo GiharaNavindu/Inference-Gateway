@@ -1,0 +1,6 @@
+# Directory for project verification screenshots:
+# - ui-gpu-inference.png (UI First Hit - Cache Miss / GPU Execution)
+# - ui-cache-hit.png (UI Second Hit - Semantic Cache Hit)
+# - locust-benchmark-report.png (Locust Load Test Summary)
+# - grafana-vllm-metrics.png (Grafana vLLM Inference Engine Dashboard)
+# - grafana-workload-resources.png (Grafana Kubernetes / Compute Resources / Workload Dashboard)
